@@ -1,4 +1,4 @@
-// Main video player functionality with YouTube IFrame API - FIXED VERSION
+// Main video player functionality with YouTube IFrame API - BLACK SCREEN FIX
 
 let videoAnalytics = null;
 let ytPlayer = null;
@@ -58,7 +58,10 @@ function openVideoFullscreen(videoId, videoTitle) {
 function initializeYouTubePlayer(videoId, videoTitle) {
     console.log('🔄 Initializing YouTube player...');
     
-    // Destroy existing player if any
+    // CRITICAL FIX: Clear the existing player element and recreate it
+    const playerContainer = document.getElementById('videoContainer');
+    
+    // Remove existing player if any
     if (ytPlayer) {
         try {
             ytPlayer.destroy();
@@ -68,9 +71,17 @@ function initializeYouTubePlayer(videoId, videoTitle) {
         ytPlayer = null;
     }
 
+    // Clear the player div
+    const existingPlayer = document.getElementById('youtube-player');
+    if (existingPlayer) {
+        existingPlayer.innerHTML = '';
+    }
+
     // Wait a bit before creating new player
     setTimeout(() => {
         try {
+            console.log('📺 Creating new YT.Player instance...');
+            
             ytPlayer = new YT.Player('youtube-player', {
                 height: '100%',
                 width: '100%',
@@ -82,7 +93,8 @@ function initializeYouTubePlayer(videoId, videoTitle) {
                     'modestbranding': 1,
                     'fs': 1,
                     'playsinline': 0,
-                    'disablekb': 0
+                    'disablekb': 0,
+                    'html5': 1
                 },
                 events: {
                     'onReady': (event) => onPlayerReady(event, videoId, videoTitle),
@@ -93,22 +105,31 @@ function initializeYouTubePlayer(videoId, videoTitle) {
                 }
             });
 
-            console.log('📺 YouTube Player instance created for:', videoId);
+            console.log('✅ YouTube Player instance created for:', videoId);
             isPlayerInitialized = true;
+            
         } catch (error) {
             console.error('❌ Error creating YouTube player:', error);
-            showMessage('Error initializing video player');
+            console.log('Error details:', error.message);
+            showMessage('Error initializing video player: ' + error.message);
         }
-    }, 200);
+    }, 300);
 }
 
 function onPlayerReady(event, videoId, videoTitle) {
     console.log('✅ YouTube Player Ready - Starting playback');
+    console.log('Player object:', event.target);
     
     try {
+        // Verify player is ready
+        if (!event.target || typeof event.target.playVideo !== 'function') {
+            console.error('❌ Player object not valid');
+            return;
+        }
+
         // Start analytics tracking
         if (videoAnalytics) {
-            videoAnalytics.startTracking(videoId, videoTitle, ytPlayer);
+            videoAnalytics.startTracking(videoId, videoTitle, event.target);
         }
         
         // Play video
@@ -125,18 +146,19 @@ function onPlayerReady(event, videoId, videoTitle) {
         
     } catch (error) {
         console.error('❌ Error in onPlayerReady:', error);
+        console.log('Error details:', error.message);
     }
 }
 
 function onPlayerStateChange(event) {
-    if (!ytPlayer || !isPlayerInitialized) {
-        console.log('⚠️ Player not ready yet');
+    if (!event.target) {
+        console.log('⚠️ Event target not available');
         return;
     }
 
     try {
-        const currentTime = ytPlayer.getCurrentTime();
-        const duration = ytPlayer.getDuration();
+        const currentTime = event.target.getCurrentTime();
+        const duration = event.target.getDuration();
         const timestamp = new Date().toISOString();
         const stateName = getPlayerStateName(event.data);
 
@@ -150,7 +172,9 @@ function onPlayerStateChange(event) {
             isVideoPlaying = true;
             
             // Log play event
-            videoAnalytics.logPlayEvent(currentTime, timestamp);
+            if (videoAnalytics) {
+                videoAnalytics.logPlayEvent(currentTime, timestamp);
+            }
             lastPlayerTime = currentTime;
             
         } else if (event.data === YT.PlayerState.PAUSED) {
@@ -158,7 +182,9 @@ function onPlayerStateChange(event) {
             isVideoPlaying = false;
             
             // Log pause event
-            videoAnalytics.logPauseEvent(currentTime, timestamp);
+            if (videoAnalytics) {
+                videoAnalytics.logPauseEvent(currentTime, timestamp);
+            }
             lastPlayerTime = currentTime;
             
         } else if (event.data === YT.PlayerState.ENDED) {
@@ -166,7 +192,9 @@ function onPlayerStateChange(event) {
             isVideoPlaying = false;
             
             // Log end event
-            videoAnalytics.logEndEvent(duration, timestamp);
+            if (videoAnalytics) {
+                videoAnalytics.logEndEvent(duration, timestamp);
+            }
             
         } else if (event.data === YT.PlayerState.BUFFERING) {
             console.log('⏳ BUFFERING');
@@ -179,6 +207,7 @@ function onPlayerStateChange(event) {
         
     } catch (error) {
         console.error('❌ Error in onPlayerStateChange:', error);
+        console.log('Error details:', error.message);
     }
 }
 
@@ -210,7 +239,15 @@ function onPlaybackQualityChange(event) {
 
 function onPlayerError(event) {
     console.error('❌ YouTube Player Error:', event.data);
-    showMessage('Error: Video could not be loaded');
+    const errorMessages = {
+        2: 'Invalid parameter',
+        5: 'HTML5 player error',
+        100: 'Video not found (removed or private)',
+        101: 'Video cannot be played embedded',
+        150: 'Video cannot be played embedded'
+    };
+    const errorMsg = errorMessages[event.data] || 'Unknown error';
+    showMessage('Error: ' + errorMsg);
 }
 
 function getPlayerStateName(state) {
@@ -262,7 +299,10 @@ function disableRightClick() {
         }
     };
 
-    playerDiv.addEventListener('contextmenu', handler);
+    const player = document.getElementById('youtube-player');
+    if (player) {
+        player.addEventListener('contextmenu', handler);
+    }
     videoContainer.addEventListener('contextmenu', handler);
 }
 
@@ -317,6 +357,12 @@ function closeVideoFullscreen() {
     unlockOrientation();
 
     fullscreenModal.classList.remove('active');
+    
+    // Clear player div
+    const playerDiv = document.getElementById('youtube-player');
+    if (playerDiv) {
+        playerDiv.innerHTML = '';
+    }
 
     displayAnalytics(analyticsData);
 }
