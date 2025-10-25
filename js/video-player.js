@@ -1,8 +1,10 @@
-// Main video player functionality with YouTube IFrame API
+// Main video player functionality with YouTube IFrame API - FIXED VERSION
 
 let videoAnalytics = null;
 let ytPlayer = null;
 let isVideoPlaying = false;
+let lastPlayerTime = 0;
+let isPlayerInitialized = false;
 
 const videoButtons = document.querySelectorAll('.video-btn');
 const fullscreenModal = document.getElementById('fullscreenModal');
@@ -18,7 +20,7 @@ const savingSpinner = document.getElementById('savingSpinner');
 console.log('📱 DOM elements loaded');
 console.log('Buttons found:', videoButtons.length);
 
-// YouTube API Ready Callback
+// YouTube API Ready Callback - GLOBAL SCOPE
 function onYouTubeIframeAPIReady() {
     console.log('✅ YouTube IFrame API Ready');
 }
@@ -44,89 +46,183 @@ function openVideoFullscreen(videoId, videoTitle) {
 
     lockToLandscape();
     requestFullscreenMode();
-    initializeYouTubePlayer(videoId, videoTitle);
+    
+    // Initialize player after a small delay to ensure DOM is ready
+    setTimeout(() => {
+        initializeYouTubePlayer(videoId, videoTitle);
+    }, 100);
+    
     disableRightClick();
 }
 
 function initializeYouTubePlayer(videoId, videoTitle) {
+    console.log('🔄 Initializing YouTube player...');
+    
+    // Destroy existing player if any
     if (ytPlayer) {
-        ytPlayer.destroy();
+        try {
+            ytPlayer.destroy();
+        } catch(e) {
+            console.log('Error destroying old player:', e);
+        }
+        ytPlayer = null;
     }
 
-    ytPlayer = new YT.Player('youtube-player', {
-        height: '100%',
-        width: '100%',
-        videoId: videoId,
-        playerVars: {
-            'autoplay': 1,
-            'controls': 1,
-            'rel': 0,
-            'modestbranding': 1,
-            'fs': 1,
-            'playsinline': 0
-        },
-        events: {
-            'onReady': function(event) {
-                onPlayerReady(event, videoId, videoTitle);
-            },
-            'onStateChange': onPlayerStateChange,
-            'onPlaybackRateChange': onPlaybackRateChange,
-            'onPlaybackQualityChange': onPlaybackQualityChange
-        }
-    });
+    // Wait a bit before creating new player
+    setTimeout(() => {
+        try {
+            ytPlayer = new YT.Player('youtube-player', {
+                height: '100%',
+                width: '100%',
+                videoId: videoId,
+                playerVars: {
+                    'autoplay': 1,
+                    'controls': 1,
+                    'rel': 0,
+                    'modestbranding': 1,
+                    'fs': 1,
+                    'playsinline': 0,
+                    'disablekb': 0
+                },
+                events: {
+                    'onReady': (event) => onPlayerReady(event, videoId, videoTitle),
+                    'onStateChange': (event) => onPlayerStateChange(event),
+                    'onPlaybackRateChange': (event) => onPlaybackRateChange(event),
+                    'onPlaybackQualityChange': (event) => onPlaybackQualityChange(event),
+                    'onError': (event) => onPlayerError(event)
+                }
+            });
 
-    console.log('📺 YouTube Player initialized for:', videoId);
+            console.log('📺 YouTube Player instance created for:', videoId);
+            isPlayerInitialized = true;
+        } catch (error) {
+            console.error('❌ Error creating YouTube player:', error);
+            showMessage('Error initializing video player');
+        }
+    }, 200);
 }
 
 function onPlayerReady(event, videoId, videoTitle) {
-    console.log('✅ YouTube Player Ready');
+    console.log('✅ YouTube Player Ready - Starting playback');
     
-    videoAnalytics.startTracking(videoId, videoTitle, ytPlayer);
-    
-    event.target.playVideo();
-    
-    console.log('▶️ Video started playing');
+    try {
+        // Start analytics tracking
+        if (videoAnalytics) {
+            videoAnalytics.startTracking(videoId, videoTitle, ytPlayer);
+        }
+        
+        // Play video
+        event.target.playVideo();
+        lastPlayerTime = 0;
+        
+        console.log('▶️ Video playback started');
+        
+        // Log initial play event
+        const timestamp = new Date().toISOString();
+        if (videoAnalytics) {
+            videoAnalytics.logPlayEvent(0, timestamp);
+        }
+        
+    } catch (error) {
+        console.error('❌ Error in onPlayerReady:', error);
+    }
 }
 
 function onPlayerStateChange(event) {
-    const currentTime = ytPlayer.getCurrentTime();
-    const duration = ytPlayer.getDuration();
-    const timestamp = new Date().toISOString();
+    if (!ytPlayer || !isPlayerInitialized) {
+        console.log('⚠️ Player not ready yet');
+        return;
+    }
 
-    console.log('State changed:', event.data);
+    try {
+        const currentTime = ytPlayer.getCurrentTime();
+        const duration = ytPlayer.getDuration();
+        const timestamp = new Date().toISOString();
+        const stateName = getPlayerStateName(event.data);
 
-    if (event.data === YT.PlayerState.PLAYING) {
-        console.log('▶️ PLAYING at', currentTime.toFixed(2), 'seconds');
-        isVideoPlaying = true;
+        console.log('=== STATE CHANGED ===');
+        console.log('State:', stateName, '(' + event.data + ')');
+        console.log('Current Time:', currentTime.toFixed(2) + 's');
+        console.log('Duration:', duration.toFixed(2) + 's');
+
+        if (event.data === YT.PlayerState.PLAYING) {
+            console.log('▶️ PLAYING');
+            isVideoPlaying = true;
+            
+            // Log play event
+            videoAnalytics.logPlayEvent(currentTime, timestamp);
+            lastPlayerTime = currentTime;
+            
+        } else if (event.data === YT.PlayerState.PAUSED) {
+            console.log('⏸️ PAUSED');
+            isVideoPlaying = false;
+            
+            // Log pause event
+            videoAnalytics.logPauseEvent(currentTime, timestamp);
+            lastPlayerTime = currentTime;
+            
+        } else if (event.data === YT.PlayerState.ENDED) {
+            console.log('✅ ENDED');
+            isVideoPlaying = false;
+            
+            // Log end event
+            videoAnalytics.logEndEvent(duration, timestamp);
+            
+        } else if (event.data === YT.PlayerState.BUFFERING) {
+            console.log('⏳ BUFFERING');
+            
+        } else if (event.data === YT.PlayerState.CUED) {
+            console.log('📌 CUED');
+        }
         
-        videoAnalytics.logPlayEvent(currentTime, timestamp);
+        console.log('===================');
         
-    } else if (event.data === YT.PlayerState.PAUSED) {
-        console.log('⏸️ PAUSED at', currentTime.toFixed(2), 'seconds');
-        isVideoPlaying = false;
-        
-        videoAnalytics.logPauseEvent(currentTime, timestamp);
-        
-    } else if (event.data === YT.PlayerState.ENDED) {
-        console.log('✅ VIDEO ENDED');
-        isVideoPlaying = false;
-        
-        videoAnalytics.logEndEvent(duration, timestamp);
+    } catch (error) {
+        console.error('❌ Error in onPlayerStateChange:', error);
     }
 }
 
 function onPlaybackRateChange(event) {
-    const playbackRate = event.data;
-    console.log('⚡ Playback rate changed to:', playbackRate + 'x');
-    
-    videoAnalytics.logPlaybackRateChange(playbackRate);
+    try {
+        const playbackRate = event.data;
+        console.log('⚡ Playback rate changed to:', playbackRate + 'x');
+        
+        if (videoAnalytics) {
+            videoAnalytics.logPlaybackRateChange(playbackRate);
+        }
+    } catch (error) {
+        console.error('❌ Error in onPlaybackRateChange:', error);
+    }
 }
 
 function onPlaybackQualityChange(event) {
-    const quality = event.data;
-    console.log('📊 Quality changed to:', quality);
-    
-    videoAnalytics.logQualityChange(quality);
+    try {
+        const quality = event.data;
+        console.log('📊 Quality changed to:', quality);
+        
+        if (videoAnalytics) {
+            videoAnalytics.logQualityChange(quality);
+        }
+    } catch (error) {
+        console.error('❌ Error in onPlaybackQualityChange:', error);
+    }
+}
+
+function onPlayerError(event) {
+    console.error('❌ YouTube Player Error:', event.data);
+    showMessage('Error: Video could not be loaded');
+}
+
+function getPlayerStateName(state) {
+    const states = {
+        '-1': 'UNSTARTED',
+        '0': 'ENDED',
+        '1': 'PLAYING',
+        '2': 'PAUSED',
+        '3': 'BUFFERING',
+        '5': 'CUED'
+    };
+    return states[state] || 'UNKNOWN';
 }
 
 function requestFullscreenMode() {
@@ -184,6 +280,7 @@ function showMessage(message) {
         z-index: 10001;
         font-size: 16px;
         text-align: center;
+        font-weight: bold;
     `;
     messageDiv.textContent = message;
     document.body.appendChild(messageDiv);
@@ -196,11 +293,19 @@ function closeVideoFullscreen() {
 
     const analyticsData = videoAnalytics.stopTracking();
 
+    // Destroy YouTube player
     if (ytPlayer) {
-        ytPlayer.destroy();
+        try {
+            ytPlayer.destroy();
+        } catch(e) {
+            console.log('Error destroying player:', e);
+        }
         ytPlayer = null;
     }
 
+    isPlayerInitialized = false;
+
+    // Exit fullscreen
     if (document.fullscreenElement) {
         document.exitFullscreen();
     } else if (document.webkitFullscreenElement) {
@@ -288,6 +393,7 @@ function closeAnalytics() {
     window.currentAnalyticsData = null;
 }
 
+// Event Listeners
 closeBtn.addEventListener('click', closeVideoFullscreen);
 closeAnalyticsBtn.addEventListener('click', closeAnalytics);
 saveToSheetsBtn.addEventListener('click', saveToGoogleSheets);
