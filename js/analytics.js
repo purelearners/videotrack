@@ -1,4 +1,4 @@
-// Analytics tracking for video viewing sessions
+// Enhanced Analytics with YouTube Event Tracking
 
 class VideoAnalytics {
     constructor() {
@@ -21,10 +21,12 @@ class VideoAnalytics {
 
         this.isTracking = false;
         this.lastTime = 0;
+        this.lastRecordedTime = 0;
         this.trackingInterval = null;
         this.tabActiveTime = 0;
         this.tabStartTime = null;
-        this.playerState = -1;
+        this.visibilityChangeHandler = null;
+        this.player = null;
     }
 
     startTracking(videoId, videoTitle, player) {
@@ -36,140 +38,114 @@ class VideoAnalytics {
 
         console.log('🎬 Analytics tracking started for:', videoTitle);
 
-        // Setup YouTube Player tracking
-        this.setupYouTubeTracking();
-        
-        // Track tab visibility
         this.setupTabVisibilityTracking();
-        
-        // Periodic progress update
         this.startProgressTracking();
     }
 
-    setupYouTubeTracking() {
-        if (!this.player) return;
-
-        // Track play/pause events
-        this.player.addEventListener('onStateChange', (event) => {
-            this.handlePlayerStateChange(event);
+    logPlayEvent(currentTime, timestamp) {
+        this.sessionData.playPauseLog.push({
+            action: 'PLAY',
+            time: currentTime.toFixed(2),
+            timestamp: timestamp
         });
 
-        // Get video duration
-        setTimeout(() => {
-            try {
-                const duration = this.player.getDuration();
-                this.sessionData.duration = duration;
-            } catch (e) {
-                console.log('Could not get duration');
-            }
-        }, 1000);
+        this.lastTime = currentTime;
+        this.lastRecordedTime = currentTime;
+
+        console.log('📝 Logged PLAY event at', currentTime.toFixed(2));
     }
 
-    handlePlayerStateChange(event) {
-        const currentTime = this.player.getCurrentTime();
-        const duration = this.player.getDuration();
-        const playbackRate = this.player.getPlaybackRate();
-        const quality = this.player.getPlaybackQuality();
+    logPauseEvent(currentTime, timestamp) {
+        const watchedDuration = currentTime - this.lastTime;
+        this.sessionData.totalWatchTime += Math.max(0, watchedDuration);
 
-        const timestamp = new Date().toISOString();
-
-        if (event.data === YT.PlayerState.PLAYING) {
-            console.log('▶️ Play event at', currentTime.toFixed(2), 'seconds');
-            
-            this.sessionData.playPauseLog.push({
-                action: 'PLAY',
-                time: currentTime,
-                timestamp: timestamp
-            });
-
-            this.lastTime = currentTime;
-            
-            if (playbackRate && !this.sessionData.playbackRates.includes(playbackRate)) {
-                this.sessionData.playbackRates.push(playbackRate);
-            }
-        } 
-        else if (event.data === YT.PlayerState.PAUSED) {
-            console.log('⏸️ Pause event at', currentTime.toFixed(2), 'seconds');
-            
-            const watchedDuration = currentTime - this.lastTime;
-            this.sessionData.totalWatchTime += watchedDuration;
-
-            this.sessionData.playPauseLog.push({
-                action: 'PAUSE',
-                time: currentTime,
-                watchedDuration: watchedDuration,
-                timestamp: timestamp
-            });
-        } 
-        else if (event.data === YT.PlayerState.ENDED) {
-            console.log('✅ Video ended');
-            
-            this.sessionData.playPauseLog.push({
-                action: 'ENDED',
-                time: duration,
-                timestamp: timestamp
-            });
-        }
-        else if (event.data === YT.PlayerState.BUFFERING) {
-            console.log('⏳ Video buffering');
+        if (Math.abs(currentTime - this.lastRecordedTime) > 2) {
+            this.logSeekEvent(this.lastRecordedTime, currentTime);
         }
 
-        // Track quality
-        if (quality) {
-            this.sessionData.playbackQuality = quality;
-        }
+        this.sessionData.playPauseLog.push({
+            action: 'PAUSE',
+            time: currentTime.toFixed(2),
+            watchedDuration: watchedDuration.toFixed(2),
+            timestamp: timestamp
+        });
+
+        this.lastRecordedTime = currentTime;
+
+        console.log('📝 Logged PAUSE event at', currentTime.toFixed(2), '| Watched:', watchedDuration.toFixed(2), 's');
     }
 
-    trackSeeking(fromTime, toTime) {
+    logEndEvent(duration, timestamp) {
+        this.sessionData.playPauseLog.push({
+            action: 'ENDED',
+            time: duration.toFixed(2),
+            timestamp: timestamp
+        });
+
+        console.log('📝 Logged ENDED event');
+    }
+
+    logSeekEvent(fromTime, toTime) {
         this.sessionData.seekHistory.push({
-            from: fromTime,
-            to: toTime,
+            from: fromTime.toFixed(2),
+            to: toTime.toFixed(2),
             timestamp: new Date().toISOString(),
-            duration: Math.abs(toTime - fromTime)
+            duration: Math.abs(toTime - fromTime).toFixed(2)
         });
 
-        console.log('📍 Seek event:', fromTime.toFixed(2), '→', toTime.toFixed(2));
+        console.log('📝 Logged SEEK event:', fromTime.toFixed(2), '→', toTime.toFixed(2));
+    }
+
+    logPlaybackRateChange(playbackRate) {
+        if (!this.sessionData.playbackRates.includes(playbackRate)) {
+            this.sessionData.playbackRates.push(playbackRate);
+        }
+
+        console.log('📝 Logged playback rate:', playbackRate + 'x');
+    }
+
+    logQualityChange(quality) {
+        this.sessionData.playbackQuality = quality;
+
+        console.log('📝 Logged quality:', quality);
     }
 
     setupTabVisibilityTracking() {
         this.tabStartTime = Date.now();
 
-        document.addEventListener('visibilitychange', () => {
+        this.visibilityChangeHandler = () => {
             const now = Date.now();
             
             if (document.hidden) {
-                // User left tab
                 this.tabActiveTime += (now - this.tabStartTime);
-                
                 this.sessionData.tabVisibilityLog.push({
                     action: 'LEFT_TAB',
                     timestamp: new Date().toISOString(),
-                    tabActiveTime: this.tabActiveTime / 1000
+                    tabActiveTime: (this.tabActiveTime / 1000).toFixed(2)
                 });
-
-                console.log('⚠️ User left tab. Active time:', (this.tabActiveTime / 1000).toFixed(2), 'seconds');
+                console.log('⚠️ User left tab. Time spent:', (this.tabActiveTime / 1000).toFixed(2), 'seconds');
             } else {
-                // User returned to tab
                 this.tabStartTime = Date.now();
-                
                 this.sessionData.tabVisibilityLog.push({
                     action: 'RETURNED_TO_TAB',
                     timestamp: new Date().toISOString()
                 });
-
                 console.log('✅ User returned to tab');
             }
-        });
+        };
+
+        document.addEventListener('visibilitychange', this.visibilityChangeHandler);
     }
 
     startProgressTracking() {
+        if (this.trackingInterval) clearInterval(this.trackingInterval);
+
         this.trackingInterval = setInterval(() => {
-            if (!this.player || !this.isTracking) return;
+            if (!this.isTracking || !this.player) return;
 
             try {
                 const currentTime = this.player.getCurrentTime();
                 const duration = this.player.getDuration();
-                const playerState = this.player.getPlayerState();
 
                 this.sessionData.currentTime = currentTime;
                 this.sessionData.duration = duration;
@@ -178,11 +154,13 @@ class VideoAnalytics {
                     this.sessionData.completionPercentage = (currentTime / duration) * 100;
                 }
 
-                if (CONFIG.TRACKING.ENABLE_DETAILED_LOGGING) {
-                    console.log(`Progress: ${currentTime.toFixed(2)}/${duration.toFixed(2)}s (${this.sessionData.completionPercentage.toFixed(1)}%)`);
+                if (Math.abs(currentTime - this.lastRecordedTime) > 3) {
+                    this.logSeekEvent(this.lastRecordedTime, currentTime);
+                    this.lastRecordedTime = currentTime;
                 }
+
             } catch (e) {
-                console.log('Error tracking progress:', e);
+                // Player might not be ready yet
             }
         }, CONFIG.TRACKING.PROGRESS_UPDATE_INTERVAL);
     }
@@ -192,28 +170,30 @@ class VideoAnalytics {
             clearInterval(this.trackingInterval);
         }
 
+        if (this.visibilityChangeHandler) {
+            document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+        }
+
         this.sessionData.closeTime = new Date().toISOString();
         
-        // Calculate final session duration
         const openTime = new Date(this.sessionData.openTime);
         const closeTime = new Date(this.sessionData.closeTime);
         this.sessionData.totalSessionDuration = (closeTime - openTime) / 1000;
 
-        // Final tab activity
         if (!document.hidden) {
             this.tabActiveTime += (Date.now() - this.tabStartTime);
         }
 
         this.sessionData.tabVisibilityLog.push({
             action: 'SESSION_ENDED',
-            totalTabTime: this.tabActiveTime / 1000,
+            totalTabTime: (this.tabActiveTime / 1000).toFixed(2),
             timestamp: new Date().toISOString()
         });
 
         this.isTracking = false;
 
         console.log('🛑 Analytics tracking stopped');
-        console.log('📊 Session Data:', this.sessionData);
+        console.log('📊 Final Session Data:', this.sessionData);
 
         return this.getFormattedAnalytics();
     }
@@ -226,15 +206,13 @@ class VideoAnalytics {
             'Close Time': this.sessionData.closeTime,
             'Total Session Duration (seconds)': this.sessionData.totalSessionDuration.toFixed(2),
             'Total Watch Time (seconds)': this.sessionData.totalWatchTime.toFixed(2),
-            'Completion Percentage': this.sessionData.completionPercentage.toFixed(2),
-            'Final Current Time': this.sessionData.currentTime.toFixed(2),
-            'Video Duration': this.sessionData.duration.toFixed(2),
-            'Playback Rates Used': this.sessionData.playbackRates.join(', '),
-            'Playback Quality': this.sessionData.playbackQuality || 'Not tracked',
+            'Completion Percentage': this.sessionData.completionPercentage.toFixed(2) + '%',
             'Tab Active Time (seconds)': (this.tabActiveTime / 1000).toFixed(2),
             'Play/Pause Events': this.sessionData.playPauseLog.length,
             'Seek Events': this.sessionData.seekHistory.length,
-            'Tab Visibility Changes': this.sessionData.tabVisibilityLog.length
+            'Tab Visibility Changes': this.sessionData.tabVisibilityLog.length,
+            'Playback Rates Used': this.sessionData.playbackRates.join(', ') || '1',
+            'Playback Quality': this.sessionData.playbackQuality || 'auto'
         };
     }
 
@@ -243,5 +221,4 @@ class VideoAnalytics {
     }
 }
 
-// Create global analytics instance
-const videoAnalytics = new VideoAnalytics();
+console.log('✅ Enhanced Analytics class loaded');
