@@ -1,13 +1,13 @@
-// Main video player functionality with fullscreen and iframe management
+// Main video player functionality with YouTube IFrame API
 
-let currentYouTubePlayer = null;
-let videoAnalytics = new VideoAnalytics();
+let videoAnalytics = null;
+let ytPlayer = null;
+let isVideoPlaying = false;
 
-// Get all video buttons
 const videoButtons = document.querySelectorAll('.video-btn');
 const fullscreenModal = document.getElementById('fullscreenModal');
 const videoContainer = document.getElementById('videoContainer');
-const youtubePlayer = document.getElementById('youtube-player');
+const playerDiv = document.getElementById('youtube-player');
 const closeBtn = document.getElementById('closeBtn');
 const analyticsDisplay = document.getElementById('analyticsDisplay');
 const analyticsContent = document.getElementById('analyticsContent');
@@ -15,84 +15,125 @@ const closeAnalyticsBtn = document.getElementById('closeAnalyticsBtn');
 const saveToSheetsBtn = document.getElementById('saveToSheetsBtn');
 const savingSpinner = document.getElementById('savingSpinner');
 
-// Load YouTube IFrame API
-function loadYouTubeAPI() {
-    if (window.YT) return;
-    
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(tag);
-}
+console.log('📱 DOM elements loaded');
+console.log('Buttons found:', videoButtons.length);
 
-// YouTube API ready callback
+// YouTube API Ready Callback
 function onYouTubeIframeAPIReady() {
-    console.log('✅ YouTube API ready');
+    console.log('✅ YouTube IFrame API Ready');
 }
-
-// Initialize YouTube API on page load
-loadYouTubeAPI();
 
 // Add event listeners to all video buttons
 videoButtons.forEach(button => {
-    button.addEventListener('click', function() {
+    button.addEventListener('click', function(e) {
+        e.preventDefault();
         const videoId = this.dataset.videoId;
         const videoTitle = this.dataset.title;
+        console.log('🖱️ Button clicked:', videoId, videoTitle);
         openVideoFullscreen(videoId, videoTitle);
     });
 });
 
-// Open video in fullscreen
 function openVideoFullscreen(videoId, videoTitle) {
-    console.log('🎬 Opening video:', videoTitle);
+    console.log('🎬 Opening video:', videoTitle, 'ID:', videoId);
 
-    // Reset analytics for new session
     videoAnalytics = new VideoAnalytics();
 
-    // Build YouTube embed URL
-    const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0&modestbranding=1&fs=1&autoplay=1`;
-    youtubePlayer.src = embedUrl;
-
-    // Show fullscreen modal
     fullscreenModal.classList.add('active');
+    console.log('🔳 Fullscreen modal opened');
 
-    // Lock to landscape on mobile
     lockToLandscape();
-
-    // Request fullscreen
     requestFullscreenMode();
-
-    // Delay to allow iframe to load
-    setTimeout(() => {
-        try {
-            // Get the YouTube player instance from iframe
-            const iframeWindow = youtubePlayer.contentWindow;
-            
-            // Start analytics tracking after a small delay
-            setTimeout(() => {
-                videoAnalytics.startTracking(videoId, videoTitle, youtubePlayer);
-            }, 2000);
-        } catch (e) {
-            console.log('Will use fallback tracking');
-            videoAnalytics.startTracking(videoId, videoTitle, null);
-        }
-    }, 500);
-
-    // Prevent right-click on iframe
+    initializeYouTubePlayer(videoId, videoTitle);
     disableRightClick();
-
-    // Disable keyboard shortcuts
-    disableKeyboardShortcuts();
-
-    // Track seeking on iframe postMessage if possible
-    setupSeekingTracking();
 }
 
-// Request fullscreen mode
+function initializeYouTubePlayer(videoId, videoTitle) {
+    if (ytPlayer) {
+        ytPlayer.destroy();
+    }
+
+    ytPlayer = new YT.Player('youtube-player', {
+        height: '100%',
+        width: '100%',
+        videoId: videoId,
+        playerVars: {
+            'autoplay': 1,
+            'controls': 1,
+            'rel': 0,
+            'modestbranding': 1,
+            'fs': 1,
+            'playsinline': 0
+        },
+        events: {
+            'onReady': function(event) {
+                onPlayerReady(event, videoId, videoTitle);
+            },
+            'onStateChange': onPlayerStateChange,
+            'onPlaybackRateChange': onPlaybackRateChange,
+            'onPlaybackQualityChange': onPlaybackQualityChange
+        }
+    });
+
+    console.log('📺 YouTube Player initialized for:', videoId);
+}
+
+function onPlayerReady(event, videoId, videoTitle) {
+    console.log('✅ YouTube Player Ready');
+    
+    videoAnalytics.startTracking(videoId, videoTitle, ytPlayer);
+    
+    event.target.playVideo();
+    
+    console.log('▶️ Video started playing');
+}
+
+function onPlayerStateChange(event) {
+    const currentTime = ytPlayer.getCurrentTime();
+    const duration = ytPlayer.getDuration();
+    const timestamp = new Date().toISOString();
+
+    console.log('State changed:', event.data);
+
+    if (event.data === YT.PlayerState.PLAYING) {
+        console.log('▶️ PLAYING at', currentTime.toFixed(2), 'seconds');
+        isVideoPlaying = true;
+        
+        videoAnalytics.logPlayEvent(currentTime, timestamp);
+        
+    } else if (event.data === YT.PlayerState.PAUSED) {
+        console.log('⏸️ PAUSED at', currentTime.toFixed(2), 'seconds');
+        isVideoPlaying = false;
+        
+        videoAnalytics.logPauseEvent(currentTime, timestamp);
+        
+    } else if (event.data === YT.PlayerState.ENDED) {
+        console.log('✅ VIDEO ENDED');
+        isVideoPlaying = false;
+        
+        videoAnalytics.logEndEvent(duration, timestamp);
+    }
+}
+
+function onPlaybackRateChange(event) {
+    const playbackRate = event.data;
+    console.log('⚡ Playback rate changed to:', playbackRate + 'x');
+    
+    videoAnalytics.logPlaybackRateChange(playbackRate);
+}
+
+function onPlaybackQualityChange(event) {
+    const quality = event.data;
+    console.log('📊 Quality changed to:', quality);
+    
+    videoAnalytics.logQualityChange(quality);
+}
+
 function requestFullscreenMode() {
     const elem = videoContainer;
 
     if (elem.requestFullscreen) {
-        elem.requestFullscreen({ navigationUI: "hide" });
+        elem.requestFullscreen({ navigationUI: "hide" }).catch(err => console.log('Fullscreen error:', err));
     } else if (elem.webkitRequestFullscreen) {
         elem.webkitRequestFullscreen();
     } else if (elem.msRequestFullscreen) {
@@ -100,7 +141,6 @@ function requestFullscreenMode() {
     }
 }
 
-// Lock orientation to landscape on mobile
 function lockToLandscape() {
     if (screen.orientation && screen.orientation.lock) {
         screen.orientation.lock('landscape-primary')
@@ -111,14 +151,12 @@ function lockToLandscape() {
     }
 }
 
-// Unlock orientation when closing fullscreen
 function unlockOrientation() {
     if (screen.orientation && screen.orientation.unlock) {
         screen.orientation.unlock();
     }
 }
 
-// Disable right-click context menu
 function disableRightClick() {
     const handler = (e) => {
         if (fullscreenModal.classList.contains('active')) {
@@ -128,54 +166,10 @@ function disableRightClick() {
         }
     };
 
-    youtubePlayer.addEventListener('contextmenu', handler);
+    playerDiv.addEventListener('contextmenu', handler);
     videoContainer.addEventListener('contextmenu', handler);
 }
 
-// Disable keyboard shortcuts
-function disableKeyboardShortcuts() {
-    const keydownHandler = (e) => {
-        if (!fullscreenModal.classList.contains('active')) return;
-
-        // Block developer tools
-        if (e.key === 'F12') {
-            e.preventDefault();
-            return false;
-        }
-        if (e.ctrlKey && e.shiftKey && e.key === 'I') {
-            e.preventDefault();
-            return false;
-        }
-        if (e.ctrlKey && e.shiftKey && e.key === 'C') {
-            e.preventDefault();
-            return false;
-        }
-    };
-
-    document.addEventListener('keydown', keydownHandler);
-}
-
-// Setup seeking tracking
-function setupSeekingTracking() {
-    let lastTime = 0;
-
-    // Try to track seeking using periodic checks
-    const seekCheckInterval = setInterval(() => {
-        if (!fullscreenModal.classList.contains('active')) {
-            clearInterval(seekCheckInterval);
-            return;
-        }
-
-        try {
-            // YouTube API doesn't expose seeking directly from iframe
-            // This is tracked through analytics timeupdate events
-        } catch (e) {
-            // Silent
-        }
-    }, 1000);
-}
-
-// Show temporary message
 function showMessage(message) {
     const messageDiv = document.createElement('div');
     messageDiv.style.cssText = `
@@ -190,34 +184,23 @@ function showMessage(message) {
         z-index: 10001;
         font-size: 16px;
         text-align: center;
-        animation: fadeInOut 2s ease-in-out;
     `;
     messageDiv.textContent = message;
     document.body.appendChild(messageDiv);
 
-    // Add animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes fadeInOut {
-            0% { opacity: 0; }
-            20% { opacity: 1; }
-            80% { opacity: 1; }
-            100% { opacity: 0; }
-        }
-    `;
-    document.head.appendChild(style);
-
     setTimeout(() => messageDiv.remove(), 2000);
 }
 
-// Close fullscreen video
 function closeVideoFullscreen() {
     console.log('❌ Closing fullscreen video');
 
-    // Stop analytics and get data
     const analyticsData = videoAnalytics.stopTracking();
 
-    // Exit fullscreen
+    if (ytPlayer) {
+        ytPlayer.destroy();
+        ytPlayer = null;
+    }
+
     if (document.fullscreenElement) {
         document.exitFullscreen();
     } else if (document.webkitFullscreenElement) {
@@ -226,18 +209,13 @@ function closeVideoFullscreen() {
         document.msExitFullscreen();
     }
 
-    // Unlock orientation
     unlockOrientation();
 
-    // Hide fullscreen modal
     fullscreenModal.classList.remove('active');
-    youtubePlayer.src = '';
 
-    // Display analytics
     displayAnalytics(analyticsData);
 }
 
-// Display analytics data
 function displayAnalytics(analyticsData) {
     analyticsContent.innerHTML = '';
 
@@ -253,14 +231,12 @@ function displayAnalytics(analyticsData) {
 
     analyticsDisplay.classList.add('active');
 
-    // Store analytics data globally for saving
     window.currentAnalyticsData = {
         formattedData: analyticsData,
         detailedData: videoAnalytics.sessionData
     };
 }
 
-// Save analytics to Google Sheets
 async function saveToGoogleSheets() {
     if (!window.currentAnalyticsData) {
         alert('No analytics data to save');
@@ -277,6 +253,8 @@ async function saveToGoogleSheets() {
             detailedData: window.currentAnalyticsData.detailedData
         };
 
+        console.log('📤 Sending data to Google Sheets:', payload);
+
         const response = await fetch(CONFIG.GOOGLE_SHEETS_WEB_APP_URL, {
             method: 'POST',
             mode: 'no-cors',
@@ -286,7 +264,8 @@ async function saveToGoogleSheets() {
             body: JSON.stringify(payload)
         });
 
-        // For CORS issues, we can still consider it successful
+        console.log('✅ Data sent to Google Sheets');
+
         savingSpinner.classList.remove('active');
         saveToSheetsBtn.disabled = false;
 
@@ -297,25 +276,22 @@ async function saveToGoogleSheets() {
         }, 2000);
 
     } catch (error) {
-        console.error('Error saving to Google Sheets:', error);
+        console.error('❌ Error saving to Google Sheets:', error);
         savingSpinner.classList.remove('active');
         saveToSheetsBtn.disabled = false;
-        showMessage('⚠️ Error saving data. Check console for details.');
+        showMessage('⚠️ Error saving data. Check console.');
     }
 }
 
-// Close analytics display
 function closeAnalytics() {
     analyticsDisplay.classList.remove('active');
     window.currentAnalyticsData = null;
 }
 
-// Event listeners
 closeBtn.addEventListener('click', closeVideoFullscreen);
 closeAnalyticsBtn.addEventListener('click', closeAnalytics);
 saveToSheetsBtn.addEventListener('click', saveToGoogleSheets);
 
-// Prevent right-click globally on video container
 videoContainer.addEventListener('contextmenu', (e) => {
     if (fullscreenModal.classList.contains('active')) {
         e.preventDefault();
@@ -323,9 +299,7 @@ videoContainer.addEventListener('contextmenu', (e) => {
     }
 });
 
-// Disable text selection on video container
 videoContainer.style.userSelect = 'none';
 videoContainer.style.webkitUserSelect = 'none';
 
-// Log page ready
-console.log('✅ Video player initialized');
+console.log('✅ Video player fully initialized and ready');
